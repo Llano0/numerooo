@@ -1,164 +1,117 @@
-
-# =============================
-# main_app.py
-# =============================
-
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from PIL import Image, ImageOps
-
 from sklearn.datasets import fetch_openml
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+import pandas as pd
 
-# -----------------------------
-# Configuración inicial
-# -----------------------------
-st.set_page_config(page_title="Clasificador MNIST Interactivo", layout="wide")
-st.title("🧠 Clasificador de Dígitos Escritos a Mano (MNIST)")
+# Configuración de la página
+st.set_page_config(page_title="MNIST Digit Classifier", layout="wide")
 
+st.title("🔢 Clasificador de Dígitos MNIST")
 st.markdown("""
-Este sistema permite:
-- Entrenar múltiples modelos
-- Visualizar métricas de desempeño
-- Probar imágenes propias
-- Ver el dígito antes de clasificar
+Esta aplicación permite entrenar diferentes modelos de Machine Learning para reconocer números escritos a mano
+y validar sus resultados en tiempo real.
 """)
 
-# -----------------------------
-# Cargar MNIST
-# -----------------------------
+# --- CARGA DE DATOS ---
 @st.cache_data
-def load_mnist():
-    mnist = fetch_openml("mnist_784", version=1, as_frame=False)
-    X = mnist.data.astype("float32")
-    y = mnist.target.astype(int)
+def load_data():
+    # Cargamos una versión reducida para velocidad, o completa (70k)
+    mnist = fetch_openml('mnist_784', version=1, as_frame=False)
+    X, y = mnist["data"], mnist["target"]
+    # Normalización
+    X = X / 255.0
     return X, y
 
-X, y = load_mnist()
+with st.spinner("Cargando base de datos MNIST..."):
+    X, y = load_data()
 
-# Para hacer la app más rápida
-subset_size = st.sidebar.slider("Tamaño del dataset usado", 2000, 20000, 5000, step=1000)
-X = X[:subset_size]
-y = y[:subset_size]
-
-# -----------------------------
-# Sidebar modelos
-# -----------------------------
-st.sidebar.header("⚙️ Configuración del modelo")
-
-model_option = st.sidebar.selectbox(
-    "Modelo",
-    ["KNN", "Decision Tree", "Random Forest", "SVM"]
+# --- SIDEBAR - CONFIGURACIÓN ---
+st.sidebar.header("Configuración del Modelo")
+model_type = st.sidebar.selectbox(
+    "Selecciona el Algoritmo",
+    ("Random Forest", "Neural Network (MLP)", "SVM (Soporte Vectorial)")
 )
 
-test_size = st.sidebar.slider("Porcentaje test", 0.1, 0.4, 0.2)
-random_state = st.sidebar.slider("Random state", 0, 100, 42)
+train_size = st.sidebar.slider("Tamaño de entrenamiento (muestras)", 1000, 10000, 5000)
 
-# Hiperparámetros dinámicos
-if model_option == "KNN":
-    k = st.sidebar.slider("Vecinos (k)", 1, 7, 3)
+# --- ENTRENAMIENTO ---
+@st.cache_resource
+def train_model(model_choice, X_data, y_data, samples):
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_data[:20000], y_data[:20000], train_size=samples, random_state=42
+    )
+    
+    if model_choice == "Random Forest":
+        model = RandomForestClassifier(n_estimators=100, n_jobs=-1)
+    elif model_choice == "Neural Network (MLP)":
+        model = MLPClassifier(hidden_layer_sizes=(50,), max_iter=20)
+    else:
+        model = SVC(kernel='rbf', probability=True)
+        
+    model.fit(X_train, y_train)
+    
+    # Métricas
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred, output_dict=True)
+    
+    return model, acc, X_test, y_test, y_pred
 
-elif model_option == "Decision Tree":
-    max_depth = st.sidebar.slider("Max depth", 2, 20, 8)
+model, accuracy, X_test, y_test, y_pred = train_model(model_type, X, y, train_size)
 
-elif model_option == "Random Forest":
-    n_estimators = st.sidebar.slider("Árboles", 10, 150, 50)
+# --- MOSTRAR MÉTRICAS ---
+st.header(f"📊 Desempeño: {model_type}")
+col1, col2, col3 = st.columns(3)
+col1.metric("Precisión (Accuracy)", f"{accuracy:.2%}")
+col2.metric("Muestras Entrenadas", train_size)
+col3.metric("Muestras de Test", len(X_test))
 
-elif model_option == "SVM":
-    C = st.sidebar.slider("C", 0.1, 5.0, 1.0)
+with st.expander("Ver Reporte Detallado"):
+    st.dataframe(pd.DataFrame(report).transpose())
 
-# -----------------------------
-# División de datos
-# -----------------------------
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=test_size, stratify=y, random_state=random_state
-)
+# --- SECCIÓN DE PRUEBAS ---
+st.divider()
+st.header("🔍 Prueba el modelo")
 
-scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+col_img, col_pred = st.columns([1, 1])
 
-# -----------------------------
-# Crear modelo
-# -----------------------------
-if model_option == "KNN":
-    model = KNeighborsClassifier(n_neighbors=k)
-
-elif model_option == "Decision Tree":
-    model = DecisionTreeClassifier(max_depth=max_depth, random_state=random_state)
-
-elif model_option == "Random Forest":
-    model = RandomForestClassifier(n_estimators=n_estimators, random_state=random_state)
-
-elif model_option == "SVM":
-    model = SVC(C=C, probability=True)
-
-# Entrenar
-model.fit(X_train_scaled, y_train)
-preds = model.predict(X_test_scaled)
-
-# -----------------------------
-# Métricas de desempeño
-# -----------------------------
-st.header("📊 Métricas del modelo")
-
-accuracy = accuracy_score(y_test, preds)
-st.metric("Accuracy", f"{accuracy:.3f}")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Reporte de clasificación")
-    report = classification_report(y_test, preds, output_dict=True)
-    st.dataframe(report)
-
-with col2:
-    st.subheader("Matriz de confusión")
-    cm = confusion_matrix(y_test, preds)
+with col_img:
+    index = st.number_input("Selecciona un índice del set de prueba (0 - {})".format(len(X_test)-1), 
+                             min_value=0, max_value=len(X_test)-1, value=42)
+    
+    digit_image = X_test[index].reshape(28, 28)
+    
     fig, ax = plt.subplots()
-    sns.heatmap(cm, cmap="Blues", ax=ax)
+    ax.imshow(digit_image, cmap='gray')
+    ax.axis('off')
     st.pyplot(fig)
 
-# -----------------------------
-# Visualización ejemplo del dataset
-# -----------------------------
-st.header("🔎 Ejemplo del dataset")
-idx = st.slider("Selecciona un índice", 0, len(X_test)-1, 10)
+with col_pred:
+    prediction = model.predict(X_test[index].reshape(1, -1))
+    
+    st.subheader("Resultado de la Predicción:")
+    st.markdown(f"<h1 style='text-align: center; color: #FF4B4B;'>{prediction[0]}</h1>", unsafe_allow_html=True)
+    
+    if prediction[0] == y_test[index]:
+        st.success(f"¡Correcto! El valor real es {y_test[index]}")
+    else:
+        st.error(f"Error. El valor real era {y_test[index]}")
 
-img = X_test[idx].reshape(28, 28)
-st.image(img, caption=f"Etiqueta real: {y_test[idx]}", width=150)
-
-# -----------------------------
-# Subir imagen propia
-# -----------------------------
-st.header("🧪 Probar con tu propia imagen")
-
-uploaded_file = st.file_uploader("Sube una imagen de un dígito (28x28 o similar)", type=["png", "jpg", "jpeg"])
-
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("L")
-    image = ImageOps.invert(image)
-    image = image.resize((28, 28))
-
-    st.subheader("Imagen procesada")
-    st.image(image, width=150)
-
-    img_array = np.array(image).reshape(1, -1).astype("float32")
-    img_scaled = scaler.transform(img_array)
-
-    pred = model.predict(img_scaled)[0]
-    proba = model.predict_proba(img_scaled)[0]
-
-    st.success(f"Predicción del modelo: {pred}")
-
-    st.subheader("Probabilidades por clase")
-    prob_dict = {str(i): float(p) for i, p in enumerate(proba)}
-    st.bar_chart(prob_dict)
+# --- MATRIZ DE CONFUSIÓN ---
+st.divider()
+if st.checkbox("Mostrar Matriz de Confusión"):
+    st.subheader("Matriz de Confusión")
+    cm = confusion_matrix(y_test, y_pred)
+    fig_cm, ax_cm = plt.subplots()
+    im = ax_cm.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    ax_cm.figure.colorbar(im, ax=ax_cm)
+    ax_cm.set(xticks=np.arange(cm.shape[1]),
+              yticks=np.arange(cm.shape[0]),
+              xlabel='Predicción', ylabel='Real')
+    st.pyplot(fig_cm)
