@@ -1,5 +1,8 @@
+# =============================
 streamlit
 scikit-learn
+pandas
 numpy
 matplotlib
-pandas
+seaborn
+pillow
